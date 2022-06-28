@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
 from torch.nn.modules.utils import _pair
 
-from mmdet.core import build_bbox_coder, multi_apply, multiclass_nms
+from mmdet.core import build_bbox_coder, multi_apply, multiclass_nms, multiclass_nms_gaussian
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
 from mmdet.models.utils import build_linear_layer
@@ -53,6 +53,7 @@ class BBoxHead(BaseModule):
         self.reg_predictor_cfg = reg_predictor_cfg
         self.cls_predictor_cfg = cls_predictor_cfg
         self.fp16_enabled = False
+        self.gaussian=True
 
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
@@ -276,6 +277,7 @@ class BBoxHead(BaseModule):
                     losses.update(acc_)
                 else:
                     losses['acc'] = accuracy(cls_score, labels)
+        # TODO: Remove weight
         if bbox_pred is not None:
             bg_class_ind = self.num_classes
             # 0~self.num_classes-1 are FG, self.num_classes is BG
@@ -292,14 +294,20 @@ class BBoxHead(BaseModule):
                     pos_bbox_pred = bbox_pred.view(
                         bbox_pred.size(0), 4)[pos_inds.type(torch.bool)]
                 else:
-                    pos_bbox_pred = bbox_pred.view(
-                        bbox_pred.size(0), -1,
-                        4)[pos_inds.type(torch.bool),
-                           labels[pos_inds.type(torch.bool)]]
+                    if self.gaussian:
+                        pos_bbox_pred = bbox_pred.view(
+                            bbox_pred.size(0), -1,
+                            8)[pos_inds.type(torch.bool),
+                            labels[pos_inds.type(torch.bool)]]
+                    else:
+                        pos_bbox_pred = bbox_pred.view(
+                            bbox_pred.size(0), -1,
+                            4)[pos_inds.type(torch.bool),
+                            labels[pos_inds.type(torch.bool)]]
                 losses['loss_bbox'] = self.loss_bbox(
                     pos_bbox_pred,
                     bbox_targets[pos_inds.type(torch.bool)],
-                    bbox_weights[pos_inds.type(torch.bool)],
+                    None,
                     avg_factor=bbox_targets.size(0),
                     reduction_override=reduction_override)
             else:
@@ -372,6 +380,75 @@ class BBoxHead(BaseModule):
 
             return det_bboxes, det_labels
 
+    @force_fp32(apply_to=('cls_score', 'bbox_pred'))
+    def get_bboxes_gaussian(self,
+                   rois,
+                   cls_score,
+                   bbox_pred,
+                   img_shape,
+                   scale_factor,
+                   rescale=False,
+                   cfg=None):
+        """Transform network output for a batch into bbox predictions.
+
+        Args:
+            rois (Tensor): Boxes to be transformed. Has shape (num_boxes, 5).
+                last dimension 5 arrange as (batch_index, x1, y1, x2, y2).
+            cls_score (Tensor): Box scores, has shape
+                (num_boxes, num_classes + 1).
+            bbox_pred (Tensor, optional): Box energies / deltas.
+                has shape (num_boxes, num_classes * 4).
+            img_shape (Sequence[int], optional): Maximum bounds for boxes,
+                specifies (H, W, C) or (H, W).
+            scale_factor (ndarray): Scale factor of the
+               image arrange as (w_scale, h_scale, w_scale, h_scale).
+            rescale (bool): If True, return boxes in original image space.
+                Default: False.
+            cfg (obj:`ConfigDict`): `test_cfg` of Bbox Head. Default: None
+
+        Returns:
+            tuple[Tensor, Tensor]:
+                Fisrt tensor is `det_bboxes`, has the shape
+                (num_boxes, 5) and last
+                dimension 5 represent (tl_x, tl_y, br_x, br_y, score).
+                Second tensor is the labels with shape (num_boxes, ).
+        """
+
+        # some loss (Seesaw loss..) may have custom activation
+        if self.custom_cls_channels:
+            scores = self.loss_cls.get_activation(cls_score)
+        else:
+            scores = F.softmax(
+                cls_score, dim=-1) if cls_score is not None else None
+        # bbox_pred would be None in some detector when with_reg is False,
+        # e.g. Grid R-CNN.
+        if bbox_pred is not None:
+            bboxes,bboxes_var = self.bbox_coder.decode_gaussian(
+                rois[..., 1:], bbox_pred, max_shape=img_shape)
+        else:
+            bboxes = rois[:, 1:].clone()
+            if img_shape is not None:
+                bboxes[:, [0, 2]].clamp_(min=0, max=img_shape[1])
+                bboxes[:, [1, 3]].clamp_(min=0, max=img_shape[0])
+
+        if rescale and bboxes.size(0) > 0:
+
+            scale_factor = bboxes.new_tensor(scale_factor)
+            bboxes = (bboxes.view(bboxes.size(0), -1, 4) / scale_factor).view(
+                bboxes.size()[0], -1)
+            bboxes_var = (bboxes_var.view(bboxes_var.size(0), -1, 4) / scale_factor).view(
+                bboxes_var.size()[0], -1)
+
+        if cfg is None:
+            return bboxes, scores, bboxes_var
+        else:
+            # TODO: doesn't implement nms
+            det_bboxes, det_labels, det_vars = multiclass_nms_gaussian(bboxes, scores, bboxes_var,
+                                                    cfg.score_thr, cfg.nms,
+                                                    cfg.max_per_img)
+
+            return det_bboxes, det_labels, det_vars
+            
     @force_fp32(apply_to=('bbox_preds', ))
     def refine_bboxes(self, rois, labels, bbox_preds, pos_is_gts, img_metas):
         """Refine bboxes during training.
