@@ -235,8 +235,8 @@ def gaussiandelta2bbox(rois,
                 [0.0000, 0.3161, 4.1945, 0.6839],
                 [5.0000, 5.0000, 5.0000, 5.0000]])
     """
-    deltas = deltas.view(deltas.size(0),80,2,4)
-    deltas = deltas[:,:,0,:].reshape(deltas.size(0),320)
+    deltas = deltas.view(deltas.size(0),-1,2,4)
+    deltas = deltas[:,:,0,:].reshape(deltas.size(0),-1)
     means = deltas.new_tensor(means).view(1,
                                           -1).repeat(1,
                                                      deltas.size(-1) // 4)
@@ -367,10 +367,10 @@ def gaussiandelta2bboxwithdelta(rois,
                 [0.0000, 0.3161, 4.1945, 0.6839],
                 [5.0000, 5.0000, 5.0000, 5.0000]])
     """
-    deltas = deltas.view(deltas.size(0),80,2,4)
-    deltas_var = deltas[:,:,1,:].reshape(deltas.size(0),320)
+    deltas = deltas.view(deltas.size(0),-1,2,4)
+    deltas_var = deltas[:,:,1,:].reshape(deltas.size(0),-1)
     deltas_var = torch.sigmoid(deltas_var)
-    deltas = deltas[:,:,0,:].reshape(deltas.size(0),320)
+    deltas = deltas[:,:,0,:].reshape(deltas.size(0),-1)
     means = deltas.new_tensor(means).view(1,
                                           -1).repeat(1,
                                                      deltas.size(-1) // 4)
