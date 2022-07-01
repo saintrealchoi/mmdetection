@@ -22,12 +22,12 @@ def nllloss(pred, target):
     pred_sigma = pred[...,-4:]
     pred_sigma = torch.sigmoid(pred_sigma)
     pred = pred[...,:-4]
-    sigma_const = 1e-2
+    sigma_const = 3e-1
     epsilon = 1e-9
     loss_xy = - torch.log(
-                torch.exp(- ((pred[..., :2] - target[..., :2]) ** 2.0 ) / (pred_sigma[..., :2] ** 2.0 ) / 2.0) / (torch.sqrt(2.0 * np.pi) * pred_sigma[..., :2] + sigma_const) + epsilon)
+                torch.exp(- ((pred[..., :2] - target[..., :2]) ** 2.0 ) / (pred_sigma[..., :2] ** 2.0 ) / 2.0) / (torch.sqrt(2.0 * np.pi * (pred_sigma[..., :2]**2)) + sigma_const) + epsilon)
     loss_wh = - torch.log(
-                torch.exp(- ((pred[..., 2:4] - target[..., 2:4]) ** 2.0) / (pred_sigma[..., 2:4] ** 2.0 ) / 2.0) / (torch.sqrt(2.0 * np.pi) * pred_sigma[..., 2:4] + sigma_const) + epsilon)
+                torch.exp(- ((pred[..., 2:4] - target[..., 2:4]) ** 2.0) / (pred_sigma[..., 2:4] ** 2.0 ) / 2.0) / (torch.sqrt(2.0 * np.pi * (pred_sigma[..., 2:4]**2)) + sigma_const) + epsilon)
     loss = loss_xy+loss_wh
     return loss
 
