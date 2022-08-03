@@ -10,6 +10,7 @@ from mmcv.runner import BaseModule, auto_fp16
 
 from mmdet.core.visualization import imshow_det_bboxes
 
+import os
 
 class BaseDetector(BaseModule, metaclass=ABCMeta):
     """Base class for detectors."""
@@ -236,6 +237,37 @@ class BaseDetector(BaseModule, metaclass=ABCMeta):
                   averaging the logs.
         """
         losses = self(**data)
+
+        if "unsup_start_iter" in os.environ:
+            cur_iter = self.cur_iter
+            unsup_start = int(os.environ["unsup_start_iter"])
+            unsup_warmup = int(os.environ["unsup_warmup_iter"])
+
+            if cur_iter < unsup_start + unsup_warmup:
+                loss_weight = 0 if cur_iter < unsup_start \
+                    else (cur_iter - unsup_start) / unsup_warmup
+                for _key, _value in losses.items():
+                    if _key.startswith('unsup'):
+                        if isinstance(_value, torch.Tensor):
+                            losses[_key] = _value * loss_weight
+                        elif isinstance(_value, list):
+                            losses[_key] = [item * loss_weight for item in _value]
+                            
+        if "distill_start_iter" in os.environ:
+            cur_iter = self.cur_iter
+            distill_start_iter = int(os.environ["distill_start_iter"])
+            distill_warmup = int(os.environ["distill_warmup"])
+
+            if cur_iter < distill_start_iter:
+                loss_weight = 0 if cur_iter < unsup_start \
+                    else (cur_iter - unsup_start) / unsup_warmup
+                for _key, _value in losses.items():
+                    if _key.startswith('sup_loss_mgd_fpn'):
+                        if isinstance(_value, torch.Tensor):
+                            losses[_key] = _value * loss_weight
+                        elif isinstance(_value, list):
+                            losses[_key] = [item * loss_weight for item in _value]
+
         loss, log_vars = self._parse_losses(losses)
 
         outputs = dict(
